@@ -20,6 +20,7 @@ import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.NinePatchDrawable;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.View;
@@ -41,6 +42,7 @@ import helium314.keyboard.latin.suggestions.MoreSuggestions;
 import helium314.keyboard.latin.suggestions.MoreSuggestionsView;
 import helium314.keyboard.latin.utils.TypefaceUtils;
 
+import java.util.HashMap;
 import java.util.HashSet;
 
 /** A view that renders a virtual {@link Keyboard}. */
@@ -84,6 +86,16 @@ public class KeyboardView extends View {
     private boolean mInvalidateAllKeys;
     /** The keys that should be drawn */
     private final HashSet<Key> mInvalidatedKeys = new HashSet<>();
+
+    // Spring press animation: per key state is {scale, velocity}. Only keys that are currently
+    // pressed or still settling have an entry.
+    private static final float PRESS_SCALE = 0.90f;
+    private static final float SPRING_STIFFNESS = 650f;
+    private static final float SPRING_DAMPING = 26f;
+    private static final float MAX_ANIM_DT = 1f / 30f;
+    private final HashMap<Key, float[]> mKeySprings = new HashMap<>();
+    private long mLastSpringTime = 0;
+    private float mSpringDt = 0f;
     /** The working rectangle for clipping */
     private final Rect mClipRect = new Rect();
     /** The keyboard bitmap buffer for faster updates */
@@ -183,6 +195,7 @@ public class KeyboardView extends View {
             setBackgroundColor(Color.TRANSPARENT);
         }
 
+        mKeySprings.clear();
         mKeyboard = keyboard;
         mKeyScaleForText = (float) Math.sqrt(1 / Settings.getValues().mKeyboardHeightScale);
         int scale = Math.min(2 * keyboard.mMostCommonKeyWidth, keyboard.mMostCommonKeyHeight - keyboard.mVerticalGap);
@@ -284,6 +297,10 @@ public class KeyboardView extends View {
             return;
         }
 
+        final long now = SystemClock.uptimeMillis();
+        mSpringDt = mLastSpringTime == 0 ? 1f / 60f : Math.min((now - mLastSpringTime) / 1000f, MAX_ANIM_DT);
+        mLastSpringTime = now;
+
         mShowsHints = Settings.getValues().mShowsHints;
         final float scale = Settings.getValues().mKeyboardHeightScale;
         mIconScaleFactor = scale < 0.8f ? scale + 0.2f : 1f;
@@ -325,6 +342,15 @@ public class KeyboardView extends View {
 
         mInvalidatedKeys.clear();
         mInvalidateAllKeys = false;
+
+        // Keep redrawing the keys that are still springing, until they settle.
+        if (mKeySprings.isEmpty()) {
+            mLastSpringTime = 0;
+        } else {
+            for (final Key springKey : mKeySprings.keySet()) {
+                invalidateKey(springKey);
+            }
+        }
     }
 
     private void onDrawKey(@NonNull final Key key, @NonNull final Canvas canvas,
@@ -332,6 +358,14 @@ public class KeyboardView extends View {
         final int keyDrawX = key.getDrawX() + getPaddingLeft();
         final int keyDrawY = key.getY() + getPaddingTop();
         canvas.translate(keyDrawX, keyDrawY);
+
+        // Spring press animation: scale the whole key (background and label) around its center.
+        final float springScale = updateKeySpring(key);
+        final boolean springActive = springScale != 1f;
+        if (springActive) {
+            canvas.save();
+            canvas.scale(springScale, springScale, key.getDrawWidth() * 0.5f, key.getHeight() * 0.5f);
+        }
 
         final KeyVisualAttributes attr = key.getVisualAttributes();
         // don't use the raw key height, linear font scaling with height is too extreme
@@ -345,7 +379,32 @@ public class KeyboardView extends View {
         }
         onDrawKeyTopVisuals(key, canvas, paint, params);
 
+        if (springActive) {
+            canvas.restore();
+        }
         canvas.translate(-keyDrawX, -keyDrawY);
+    }
+
+    /** Advances the press spring of the key by one frame and returns the scale to draw it with. */
+    private float updateKeySpring(@NonNull final Key key) {
+        final float target = key.isPressed() ? PRESS_SCALE : 1f;
+        float[] state = mKeySprings.get(key);
+        if (state == null) {
+            if (target == 1f) {
+                return 1f;
+            }
+            state = new float[] { 1f, 0f };
+            mKeySprings.put(key, state);
+        }
+        // semi-implicit Euler step of a damped spring pulling the scale towards the target
+        final float dt = mSpringDt;
+        state[1] += (-SPRING_STIFFNESS * (state[0] - target) - SPRING_DAMPING * state[1]) * dt;
+        state[0] += state[1] * dt;
+        if (target == 1f && Math.abs(state[0] - 1f) < 0.002f && Math.abs(state[1]) < 0.05f) {
+            mKeySprings.remove(key);
+            return 1f;
+        }
+        return state[0];
     }
 
     // Draw key background.
