@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Floating key: a soft translucent shadow layer sits slightly below the key face. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item>
+    <!-- Soft shadow, offset downward -->
+    <item android:top="1dp">
         <shape android:shape="rectangle">
-            <solid android:color="@color/key_bottom_bevel_lxx_base" />
-            <corners android:radius="10dp" />
+            <solid android:color="#33000000" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
-    <item android:bottom="1dp">
+    <!-- Key face, lifted 2dp above the shadow -->
+    <item android:bottom="2dp">
         <shape android:shape="rectangle">
             <solid android:color="@color/key_background_normal_lxx_base_border" />
-            <corners android:radius="10dp" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
 </layer-list>
